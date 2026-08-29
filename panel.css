@@ -1,0 +1,273 @@
+/* Panel styles — loaded inside the shadow root, so selectors stay simple and
+   there is no risk of clashing with (or inheriting from) ChatGPT's own CSS. */
+
+:host,
+* {
+  box-sizing: border-box;
+}
+
+.cbig-panel {
+  position: fixed;
+  top: 84px;
+  right: 20px;
+  width: 340px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  background: #1e1f22;
+  color: #e8e8ea;
+  border: 1px solid #3a3b3f;
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+    Arial, sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+  z-index: 2147483647;
+  overflow: hidden;
+}
+
+.cbig-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: #26272b;
+  border-bottom: 1px solid #3a3b3f;
+  user-select: none;
+}
+
+.cbig-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.cbig-header-btns {
+  display: flex;
+  gap: 6px;
+}
+
+.cbig-icon {
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 6px;
+  background: #3a3b3f;
+  color: #e8e8ea;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+}
+.cbig-icon:hover {
+  background: #4a4b50;
+}
+
+.cbig-body {
+  padding: 12px;
+  overflow-y: auto;
+}
+
+.cbig-panel.cbig-collapsed .cbig-body {
+  display: none;
+}
+
+.cbig-label {
+  display: block;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #9a9ba1;
+  margin-bottom: 5px;
+}
+
+.cbig-prompts {
+  width: 100%;
+  min-height: 90px;
+  max-height: 180px;
+  resize: vertical;
+  padding: 8px;
+  background: #131417;
+  color: #e8e8ea;
+  border: 1px solid #3a3b3f;
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+.cbig-prompts:focus {
+  outline: none;
+  border-color: #10a37f;
+}
+.cbig-prompts:disabled {
+  opacity: 0.6;
+}
+
+.cbig-count {
+  margin: 10px 0 6px;
+  color: #9a9ba1;
+}
+.cbig-count b {
+  color: #e8e8ea;
+}
+
+.cbig-list {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  max-height: 170px;
+  overflow-y: auto;
+  border: 1px solid #2c2d31;
+  border-radius: 8px;
+}
+.cbig-list:empty {
+  display: none;
+}
+
+.cbig-row {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  border-bottom: 1px solid #2c2d31;
+}
+.cbig-row:last-child {
+  border-bottom: none;
+}
+
+.cbig-rownum {
+  font-family: ui-monospace, monospace;
+  color: #9a9ba1;
+  font-size: 12px;
+}
+
+.cbig-rowtext {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #cfcfd4;
+}
+
+.cbig-badge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: #3a3b3f;
+  color: #c9cace;
+  white-space: nowrap;
+}
+.cbig-s-submitting,
+.cbig-s-generating {
+  background: #3a3320;
+  color: #f0c674;
+}
+.cbig-s-downloading {
+  background: #23303a;
+  color: #6fb1d6;
+}
+.cbig-s-done {
+  background: #1e3a2a;
+  color: #55c68a;
+}
+.cbig-s-timeout,
+.cbig-s-failed,
+.cbig-s-error {
+  background: #3a2323;
+  color: #e08585;
+}
+
+.cbig-settings {
+  margin-bottom: 10px;
+  border: 1px solid #2c2d31;
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+.cbig-settings summary {
+  cursor: pointer;
+  color: #9a9ba1;
+  font-size: 12px;
+}
+
+.cbig-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 10px 0;
+}
+.cbig-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: #9a9ba1;
+}
+.cbig-grid input {
+  padding: 5px 6px;
+  background: #131417;
+  color: #e8e8ea;
+  border: 1px solid #3a3b3f;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.cbig-grid input:focus {
+  outline: none;
+  border-color: #10a37f;
+}
+
+.cbig-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #c9cace;
+}
+
+.cbig-controls {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.cbig-btn {
+  flex: 1;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 8px;
+  background: #3a3b3f;
+  color: #e8e8ea;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+.cbig-btn:hover:not(:disabled) {
+  background: #4a4b50;
+}
+.cbig-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.cbig-start {
+  background: #10a37f;
+  color: #fff;
+}
+.cbig-start:hover:not(:disabled) {
+  background: #0e916f;
+}
+
+.cbig-log {
+  max-height: 120px;
+  overflow-y: auto;
+  background: #131417;
+  border: 1px solid #2c2d31;
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  color: #9a9ba1;
+}
+.cbig-log-line {
+  padding: 1px 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
