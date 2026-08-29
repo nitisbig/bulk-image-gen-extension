@@ -27,9 +27,16 @@ with an incremental filename: `01.png`, `02.png`, `03.png`, …
    - **Delay (ms)** — pause between prompts.
    - **Timeout (ms)** — max time to wait for one image before giving up.
    - **Skip failed prompts** — continue past a timeout/error instead of stopping.
-3. Click **Start**. Each row updates its status: `typing → generating → saving →
-   done`. Use **Pause/Resume** or **Stop** at any time. After a Stop you can
-   **Resume queue** from where it left off.
+3. **Auto-download images** (checkbox above the buttons) — leave it **checked** to
+   save each image; **uncheck** it to only generate the images in the chat
+   without downloading anything.
+4. Click **Start**. Each row updates its status: `typing → generating → saving →
+   done` (or `generating → generated` when auto-download is off). Use
+   **Pause/Resume** or **Stop** at any time. After a Stop you can **Resume
+   queue** from where it left off.
+
+**Resize / move the panel:** drag the **header** to move it; drag the
+**bottom-right corner** to resize it. Click **–** to collapse/expand.
 
 Files download to your normal Downloads directory (Chrome does not allow
 extensions to write elsewhere), under the folder you set.

@@ -5,7 +5,7 @@
  * generated image to finish, and downloads it as 01.png, 02.png, ...
  *
  * Everything ChatGPT-DOM-specific lives in SELECTORS + the small set of
- * functions below (setPromptText, submitComposer, findGeneratedImages). If
+ * functions below (setPromptText, submitComposer, candidateImages). If
  * ChatGPT changes its markup, those are the only places you should need to touch.
  */
 (() => {
@@ -63,6 +63,7 @@
     timeoutMs: 180000, // max wait for one image
     stableMs: 1500, // image src must hold steady this long to count as "done"
     skipOnFail: true,
+    autoDownload: true, // false = only generate, don't download
   };
 
   let settings = { ...DEFAULTS };
@@ -232,58 +233,97 @@
     throw new Error("Could not find a way to submit the prompt");
   }
 
-  function findGeneratedImages() {
-    const imgs = Array.from(
-      document.querySelectorAll(`${SELECTORS.assistantTurn} img`)
-    );
-    return imgs.filter((im) => {
-      const src = im.currentSrc || im.src || "";
-      if (!src) return false;
-      const looksGenerated = /oaiusercontent|blob:|\/backend-api\/|files\./i.test(
-        src
-      );
-      const bigEnough = (im.naturalWidth || im.width || 0) >= 128;
-      return looksGenerated && bigEnough;
+  // --- Generated-image detection ---------------------------------------------
+  // We do NOT rely on a specific message container (ChatGPT changes those
+  // often). Instead we look for the largest raster <img> on the page that
+  // appeared after we submitted the prompt — that is the generated image.
+
+  function srcOf(im) {
+    return im.currentSrc || im.src || "";
+  }
+
+  function imgSize(im) {
+    const r = im.getBoundingClientRect();
+    const w = Math.max(im.naturalWidth || 0, Math.round(r.width) || 0);
+    const h = Math.max(im.naturalHeight || 0, Math.round(r.height) || 0);
+    return { w, h, area: w * h };
+  }
+
+  function isChromeImg(im) {
+    // Ignore nav / sidebar / header / profile / avatar imagery and vector icons.
+    if (
+      im.closest(
+        'nav, header, aside, [data-testid*="profile" i], [class*="avatar" i]'
+      )
+    )
+      return true;
+    const src = srcOf(im);
+    if (!src) return false; // keep: may be a not-yet-loaded generated image
+    if (/\.svg(\?|$)|image\/svg/i.test(src)) return true;
+    return false;
+  }
+
+  const MIN_IMG = 200; // generated images are large; avatars/icons are not
+
+  function candidateImages() {
+    return Array.from(document.images).filter((im) => {
+      if (isChromeImg(im)) return false;
+      const { w, h } = imgSize(im);
+      return w >= MIN_IMG && h >= MIN_IMG;
     });
   }
 
-  // Waits for a *new* finished image (beyond the ones present before submit).
-  async function waitForNewImage(prevCount) {
+  // Waits for a *new* finished image (largest <img> not present before submit).
+  // Completion = its source has stayed identical AND decoded for `stableMs`.
+  // We intentionally do NOT block on the "stop" button.
+  async function waitForNewImage(prevSrcs) {
     const start = Date.now();
     let lastSrc = "";
     let stableSince = 0;
-    let sawStop = false;
+    let announced = false;
 
     while (Date.now() - start < settings.timeoutMs) {
       if (!state.running) return null;
 
-      const stopping = !!pick(SELECTORS.stop);
-      if (stopping) sawStop = true;
+      const fresh = candidateImages()
+        .filter((im) => !prevSrcs.has(srcOf(im)))
+        .sort((a, b) => imgSize(b).area - imgSize(a).area);
+      const target = fresh[0] || null;
 
-      const imgs = findGeneratedImages();
-      if (imgs.length > prevCount && !stopping) {
-        const img = imgs[imgs.length - 1];
-        const src = img.currentSrc || img.src;
+      if (target) {
+        const src = srcOf(target);
+        const { w, h } = imgSize(target);
+        const decoded = target.complete && target.naturalWidth > 0;
 
-        if (src && src === lastSrc) {
+        if (!announced) {
+          log(`Detected image ${w}×${h}; waiting for it to finish…`);
+          announced = true;
+        }
+        if (src && src === lastSrc && decoded) {
           if (!stableSince) stableSince = Date.now();
-          if (
-            Date.now() - stableSince >= settings.stableMs &&
-            img.naturalWidth > 0
-          ) {
-            return img; // stable + decoded => finished
-          }
+          if (Date.now() - stableSince >= settings.stableMs) return target;
         } else {
           lastSrc = src;
           stableSince = 0;
         }
       }
 
-      await sleep(400);
+      await sleep(350);
     }
 
-    // Timed out. Note whether generation ever appeared to start.
-    if (!sawStop) log("Note: never saw a 'stop generating' state for this prompt.");
+    // Diagnostic: show the biggest images so we can tell whether the generated
+    // one is even an <img>, and how large it is.
+    const biggest = Array.from(document.images)
+      .map((im) => imgSize(im))
+      .filter((s) => s.w >= 100)
+      .sort((a, b) => b.area - a.area)
+      .slice(0, 5)
+      .map((s) => `${s.w}×${s.h}`)
+      .join(", ");
+    log(
+      `Timed out. Largest images on page: [${biggest || "none"}]. ` +
+        `If your generated image is among them, tell me its size.`
+    );
     return null;
   }
 
@@ -381,13 +421,13 @@
       setRowStatus(i, "submitting");
 
       try {
-        const prevCount = findGeneratedImages().length;
+        const prevSrcs = new Set(candidateImages().map(srcOf));
 
         await setPromptText(prompts[i]);
         await submitComposer();
         setRowStatus(i, "generating");
 
-        const img = await waitForNewImage(prevCount);
+        const img = await waitForNewImage(prevSrcs);
         if (!img) {
           setRowStatus(i, "timeout");
           log(`#${numLabel(i)} timed out after ${Math.round(settings.timeoutMs / 1000)}s.`);
@@ -396,9 +436,14 @@
           break;
         }
 
-        setRowStatus(i, "downloading");
-        const res = await downloadImage(i, img);
-        setRowStatus(i, res.ok ? "done" : "failed");
+        if (settings.autoDownload) {
+          setRowStatus(i, "downloading");
+          const res = await downloadImage(i, img);
+          setRowStatus(i, res.ok ? "done" : "failed");
+        } else {
+          setRowStatus(i, "generated");
+          log(`#${numLabel(i)} generated (download skipped).`);
+        }
       } catch (e) {
         setRowStatus(i, "error");
         log(`#${numLabel(i)} error: ${e.message}`);
@@ -481,6 +526,8 @@
           </div>
           <label class="cbig-check"><input data-k="skipOnFail" type="checkbox"> Skip failed prompts and continue</label>
         </details>
+
+        <label class="cbig-check cbig-autodl"><input data-k="autoDownload" type="checkbox"> Auto-download images (uncheck to only generate)</label>
 
         <div class="cbig-controls">
           <button class="cbig-btn cbig-start">Start</button>
@@ -568,6 +615,7 @@
     generating: "generating",
     downloading: "saving",
     done: "done",
+    generated: "generated",
     timeout: "timeout",
     failed: "save failed",
     error: "error",

@@ -11,7 +11,10 @@
   top: 84px;
   right: 20px;
   width: 340px;
-  max-height: 80vh;
+  min-width: 300px;
+  min-height: 220px;
+  max-width: 96vw;
+  max-height: 94vh;
   display: flex;
   flex-direction: column;
   background: #1e1f22;
@@ -25,6 +28,7 @@
   line-height: 1.4;
   z-index: 2147483647;
   overflow: hidden;
+  resize: both; /* drag the bottom-right corner to resize */
 }
 
 .cbig-header {
@@ -65,10 +69,17 @@
 .cbig-body {
   padding: 12px;
   overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .cbig-panel.cbig-collapsed .cbig-body {
   display: none;
+}
+
+.cbig-panel.cbig-collapsed {
+  resize: none;
+  min-height: 0;
 }
 
 .cbig-label {
@@ -166,7 +177,8 @@
   background: #23303a;
   color: #6fb1d6;
 }
-.cbig-s-done {
+.cbig-s-done,
+.cbig-s-generated {
   background: #1e3a2a;
   color: #55c68a;
 }
@@ -221,6 +233,9 @@
   gap: 6px;
   font-size: 12px;
   color: #c9cace;
+}
+.cbig-autodl {
+  margin: 2px 0 10px;
 }
 
 .cbig-controls {
