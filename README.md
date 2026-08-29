@@ -30,13 +30,17 @@ with an incremental filename: `01.png`, `02.png`, `03.png`, …
 3. **Auto-download images** (checkbox above the buttons) — leave it **checked** to
    save each image; **uncheck** it to only generate the images in the chat
    without downloading anything.
-4. Click **Start**. Each row updates its status: `typing → generating → saving →
-   done` (or `generating → generated` when auto-download is off). Use
-   **Pause/Resume** or **Stop** at any time. After a Stop you can **Resume
-   queue** from where it left off.
+4. Click **Start**. A **progress bar** tracks the run (`2 / 5 processed`, with
+   live **done / failed / left** counts), and each row updates its status:
+   `typing → generating → saving → done` (or `generating → generated` when
+   auto-download is off). Use **Pause/Resume** or **Stop** at any time. After a
+   Stop you can **Resume queue** from where it left off.
 
-**Resize / move the panel:** drag the **header** to move it; drag the
-**bottom-right corner** to resize it. Click **–** to collapse/expand.
+**Move / resize / hide the panel:** drag the **header** to move it; drag the
+**bottom-right corner** to resize it. Use the **chevron** (˅) in the header to
+collapse/expand, and the **✕** to hide the panel. Click the extension's
+**toolbar icon** to show it again (the icon toggles the panel on the current
+chatgpt.com tab).
 
 Files download to your normal Downloads directory (Chrome does not allow
 extensions to write elsewhere), under the folder you set.

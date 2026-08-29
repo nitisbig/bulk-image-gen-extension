@@ -487,6 +487,38 @@
   // ---------------------------------------------------------------------------
   const ui = {}; // filled in by buildPanel
 
+  // Inline SVG icons (Lucide-style, consistent 1.75 stroke). No emoji — vector
+  // icons scale cleanly and theme via currentColor. aria-hidden: they always sit
+  // beside a text label or an aria-labelled control.
+  const svg = (inner, o = {}) =>
+    `<svg viewBox="0 0 24 24" fill="${o.fill || "none"}" stroke="${
+      o.stroke || "currentColor"
+    }" stroke-width="${o.sw || 1.75}" stroke-linecap="round" ` +
+    `stroke-linejoin="round" aria-hidden="true" focusable="false">${inner}</svg>`;
+
+  const ICONS = {
+    logo: svg(
+      '<path d="M18 22H4a2 2 0 0 1-2-2V6"/><path d="m22 13-1.3-1.3a2.4 2.4 0 0 0-3.4 0L11 18"/><circle cx="12" cy="8" r="2"/><rect width="16" height="16" x="6" y="2" rx="2"/>'
+    ),
+    chevron: svg('<path d="m6 9 6 6 6-6"/>'),
+    close: svg('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>'),
+    play: svg('<path d="M6 4.5v15l13-7.5z"/>', { fill: "currentColor", stroke: "none" }),
+    pause: svg(
+      '<rect x="6.5" y="4.5" width="4" height="15" rx="1"/><rect x="13.5" y="4.5" width="4" height="15" rx="1"/>',
+      { fill: "currentColor", stroke: "none" }
+    ),
+    stop: svg('<rect x="6" y="6" width="12" height="12" rx="2"/>', {
+      fill: "currentColor",
+      stroke: "none",
+    }),
+    settings: svg(
+      '<line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/>'
+    ),
+    empty: svg(
+      '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>'
+    ),
+  };
+
   function buildPanel() {
     const host = document.createElement("div");
     host.id = "cbig-host";
@@ -500,42 +532,84 @@
 
     const wrap = document.createElement("div");
     wrap.className = "cbig-panel";
+    wrap.setAttribute("role", "dialog");
+    wrap.setAttribute("aria-label", "Bulk Image Generator");
     wrap.innerHTML = `
       <div class="cbig-header" data-drag>
-        <span class="cbig-title">Bulk Image Generator</span>
+        <span class="cbig-logo">${ICONS.logo}</span>
+        <span class="cbig-heading">
+          <span class="cbig-title">Bulk Image Generator</span>
+          <span class="cbig-subtitle">Queue prompts → auto-download</span>
+        </span>
         <div class="cbig-header-btns">
-          <button class="cbig-icon" data-min title="Collapse">–</button>
+          <button class="cbig-icon cbig-min" data-min type="button" aria-label="Collapse panel" title="Collapse">${ICONS.chevron}</button>
+          <button class="cbig-icon cbig-close" data-close type="button" aria-label="Hide panel" title="Hide — reopen from the toolbar icon">${ICONS.close}</button>
         </div>
       </div>
       <div class="cbig-body">
-        <label class="cbig-label">Prompts (one per line)</label>
-        <textarea class="cbig-prompts" placeholder="a red fox in snow&#10;a city skyline at night&#10;a bowl of ramen, top down"></textarea>
-
-        <div class="cbig-count">Detected images: <b class="cbig-num">0</b></div>
-        <ol class="cbig-list"></ol>
-
-        <details class="cbig-settings">
-          <summary>Settings</summary>
-          <div class="cbig-grid">
-            <label>Folder<input data-k="folder" type="text"></label>
-            <label>Prefix<input data-k="prefix" type="text" placeholder="(none)"></label>
-            <label>Start #<input data-k="startIndex" type="number" min="0"></label>
-            <label>Pad<input data-k="pad" type="number" min="1" max="6"></label>
-            <label>Delay (ms)<input data-k="delayMs" type="number" min="0" step="500"></label>
-            <label>Timeout (ms)<input data-k="timeoutMs" type="number" min="10000" step="5000"></label>
+        <div class="cbig-field">
+          <div class="cbig-label-row">
+            <label class="cbig-label" for="cbig-prompts">Prompts</label>
+            <span class="cbig-chip"><b class="cbig-num">0</b>&nbsp;queued</span>
           </div>
-          <label class="cbig-check"><input data-k="skipOnFail" type="checkbox"> Skip failed prompts and continue</label>
-        </details>
-
-        <label class="cbig-check cbig-autodl"><input data-k="autoDownload" type="checkbox"> Auto-download images (uncheck to only generate)</label>
-
-        <div class="cbig-controls">
-          <button class="cbig-btn cbig-start">Start</button>
-          <button class="cbig-btn cbig-pause" disabled>Pause</button>
-          <button class="cbig-btn cbig-stop" disabled>Stop</button>
+          <textarea id="cbig-prompts" class="cbig-prompts" spellcheck="false" placeholder="One prompt per line…&#10;a red fox in snow&#10;a city skyline at night&#10;a bowl of ramen, top down"></textarea>
         </div>
 
-        <div class="cbig-log" aria-live="polite"></div>
+        <div class="cbig-progress" role="progressbar" aria-label="Queue progress" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
+          <div class="cbig-progress-head">
+            <span class="cbig-progress-count"><b class="cbig-done">0</b><small>&nbsp;/&nbsp;<span class="cbig-total">0</span> processed</small></span>
+            <span class="cbig-progress-pct">0%</span>
+          </div>
+          <div class="cbig-track"><div class="cbig-track-fill"></div></div>
+          <div class="cbig-stats">
+            <span class="cbig-stat cbig-stat-done"><b class="cbig-stat-done-n">0</b>&nbsp;done</span>
+            <span class="cbig-stat cbig-stat-fail"><b class="cbig-stat-fail-n">0</b>&nbsp;failed</span>
+            <span class="cbig-stat cbig-stat-left"><b class="cbig-stat-left-n">0</b>&nbsp;left</span>
+          </div>
+        </div>
+
+        <ol class="cbig-list" aria-label="Prompt queue"></ol>
+        <div class="cbig-empty" data-empty>
+          ${ICONS.empty}
+          <span class="cbig-empty-title">No prompts yet</span>
+          <span class="cbig-empty-sub">Paste one prompt per line above. They'll appear here, numbered and ready to generate.</span>
+        </div>
+
+        <details class="cbig-settings">
+          <summary>${ICONS.settings}<span>Settings</span><span class="cbig-chevron">${ICONS.chevron}</span></summary>
+          <div class="cbig-settings-body">
+            <div class="cbig-grid">
+              <label>Folder<input data-k="folder" type="text" spellcheck="false"></label>
+              <label>Prefix<input data-k="prefix" type="text" spellcheck="false" placeholder="(none)"></label>
+              <label>Start #<input data-k="startIndex" type="number" min="0"></label>
+              <label>Zero-pad<input data-k="pad" type="number" min="1" max="6"></label>
+              <label>Delay (ms)<input data-k="delayMs" type="number" min="0" step="500"></label>
+              <label>Timeout (ms)<input data-k="timeoutMs" type="number" min="10000" step="5000"></label>
+            </div>
+            <label class="cbig-switch">
+              <input data-k="skipOnFail" type="checkbox">
+              <span class="cbig-track-sw"></span>
+              <span class="cbig-switch-text">Skip failed prompts<small>Continue past a timeout or error</small></span>
+            </label>
+          </div>
+        </details>
+
+        <label class="cbig-switch cbig-autodl">
+          <input data-k="autoDownload" type="checkbox">
+          <span class="cbig-track-sw"></span>
+          <span class="cbig-switch-text">Auto-download images<small>Uncheck to only generate, no saving</small></span>
+        </label>
+
+        <div class="cbig-controls">
+          <button class="cbig-btn cbig-start" type="button">${ICONS.play}<span class="cbig-start-label">Start</span></button>
+          <button class="cbig-btn cbig-pause" type="button" disabled aria-label="Pause">${ICONS.pause}<span>Pause</span></button>
+          <button class="cbig-btn cbig-stop" type="button" disabled aria-label="Stop">${ICONS.stop}</button>
+        </div>
+
+        <div class="cbig-log-wrap">
+          <span class="cbig-label">Activity</span>
+          <div class="cbig-log" aria-live="polite" aria-label="Activity log"></div>
+        </div>
       </div>
     `;
     root.appendChild(wrap);
@@ -548,10 +622,23 @@
     ui.prompts = root.querySelector(".cbig-prompts");
     ui.num = root.querySelector(".cbig-num");
     ui.list = root.querySelector(".cbig-list");
+    ui.empty = root.querySelector("[data-empty]");
     ui.log = root.querySelector(".cbig-log");
     ui.startBtn = root.querySelector(".cbig-start");
+    ui.startLabel = root.querySelector(".cbig-start-label");
     ui.pauseBtn = root.querySelector(".cbig-pause");
     ui.stopBtn = root.querySelector(".cbig-stop");
+    ui.closeBtn = root.querySelector("[data-close]");
+
+    // Progress + stats.
+    ui.progress = root.querySelector(".cbig-progress");
+    ui.trackFill = root.querySelector(".cbig-track-fill");
+    ui.progressPct = root.querySelector(".cbig-progress-pct");
+    ui.doneNum = root.querySelector(".cbig-done");
+    ui.totalNum = root.querySelector(".cbig-total");
+    ui.statDone = root.querySelector(".cbig-stat-done-n");
+    ui.statFail = root.querySelector(".cbig-stat-fail-n");
+    ui.statLeft = root.querySelector(".cbig-stat-left-n");
 
     // Restore values.
     ui.prompts.value = settings.prompts;
@@ -586,28 +673,80 @@
     root
       .querySelector("[data-min]")
       .addEventListener("click", () => wrap.classList.toggle("cbig-collapsed"));
+    ui.closeBtn.addEventListener("click", () => hidePanel());
 
     makeDraggable(wrap, root.querySelector("[data-drag]"));
     renderList();
     reflectControls();
   }
 
+  // Show/hide the whole panel. Closing is non-destructive — the toolbar icon
+  // re-opens it (see the runtime message listener + background.js).
+  function hidePanel() {
+    if (ui.host) ui.host.style.display = "none";
+  }
+  function showPanel() {
+    if (ui.host) ui.host.style.display = "";
+  }
+  function togglePanel() {
+    if (!ui.host) return;
+    if (ui.host.style.display === "none") showPanel();
+    else hidePanel();
+  }
+
   function renderList() {
     const prompts = getPrompts();
     ui.num.textContent = String(prompts.length);
+    if (ui.empty) ui.empty.style.display = prompts.length ? "none" : "flex";
     ui.list.innerHTML = "";
     prompts.forEach((p, i) => {
       const li = document.createElement("li");
       li.className = "cbig-row";
       li.dataset.i = String(i);
       li.innerHTML = `
-        <span class="cbig-badge" data-badge>queued</span>
+        <span class="cbig-dot"></span>
         <span class="cbig-rownum">${numLabel(i)}</span>
         <span class="cbig-rowtext"></span>
+        <span class="cbig-badge" data-badge>queued</span>
       `;
-      li.querySelector(".cbig-rowtext").textContent = p;
+      const text = li.querySelector(".cbig-rowtext");
+      text.textContent = p;
+      text.title = p; // full prompt on hover when the row is truncated
       ui.list.appendChild(li);
     });
+    updateStats();
+  }
+
+  // Recompute the progress bar + stat counts from the current row statuses.
+  // Progress advances on every *processed* prompt (a failure still counts as
+  // handled), which is the right semantics for a queue.
+  function updateStats() {
+    if (!ui.list) return;
+    const rows = Array.from(ui.list.querySelectorAll(".cbig-row"));
+    const total = rows.length;
+    let done = 0;
+    let failed = 0;
+    rows.forEach((li) => {
+      const cls = (li.querySelector("[data-badge]") || {}).className || "";
+      if (/cbig-s-(?:done|generated)\b/.test(cls)) done++;
+      else if (/cbig-s-(?:timeout|failed|error)\b/.test(cls)) failed++;
+    });
+    const finished = done + failed;
+    const left = Math.max(0, total - finished);
+    const pct = total ? Math.round((finished / total) * 100) : 0;
+
+    if (ui.progress) {
+      ui.progress.classList.toggle("is-visible", total > 0);
+      ui.progress.setAttribute("aria-valuemax", String(total));
+      ui.progress.setAttribute("aria-valuenow", String(finished));
+    }
+    if (ui.trackFill) ui.trackFill.style.width = pct + "%";
+    if (ui.progressPct) ui.progressPct.textContent = pct + "%";
+    if (ui.doneNum) ui.doneNum.textContent = String(finished);
+    if (ui.totalNum) ui.totalNum.textContent = String(total);
+    if (ui.statDone) ui.statDone.textContent = String(done);
+    if (ui.statFail) ui.statFail.textContent = String(failed);
+    if (ui.statLeft) ui.statLeft.textContent = String(left);
   }
 
   const STATUS_LABEL = {
@@ -627,7 +766,13 @@
     const badge = li.querySelector("[data-badge]");
     badge.textContent = STATUS_LABEL[status] || status;
     badge.className = "cbig-badge cbig-s-" + status;
+    const active =
+      status === "submitting" ||
+      status === "generating" ||
+      status === "downloading";
+    li.classList.toggle("is-active", active);
     li.scrollIntoView({ block: "nearest" });
+    updateStats();
   }
 
   function reflectControls() {
@@ -635,10 +780,19 @@
     ui.startBtn.disabled = state.running;
     ui.pauseBtn.disabled = !state.running;
     ui.stopBtn.disabled = !state.running;
-    ui.pauseBtn.textContent = state.paused ? "Resume" : "Pause";
     ui.prompts.disabled = state.running;
-    ui.startBtn.textContent =
-      !state.running && state.cursor > 0 ? "Resume queue" : "Start";
+
+    ui.pauseBtn.innerHTML = state.paused
+      ? ICONS.play + "<span>Resume</span>"
+      : ICONS.pause + "<span>Pause</span>";
+    ui.pauseBtn.setAttribute("aria-label", state.paused ? "Resume" : "Pause");
+
+    if (ui.startLabel)
+      ui.startLabel.textContent =
+        !state.running && state.cursor > 0 ? "Resume queue" : "Start";
+
+    ui.panel.classList.toggle("cbig-running", state.running);
+    updateStats();
   }
 
   function makeDraggable(panel, handle) {
@@ -670,6 +824,18 @@
   (async function init() {
     await loadSettings();
     buildPanel();
+
+    // Clicking the extension's toolbar icon toggles the panel (see background.js).
+    // This makes the header "Hide" button non-destructive — you can always get
+    // the panel back.
+    try {
+      chrome.runtime.onMessage.addListener((msg) => {
+        if (msg && msg.type === "toggle-panel") togglePanel();
+      });
+    } catch {
+      /* ignore — messaging unavailable */
+    }
+
     log("Ready. Paste prompts, then click Start.");
   })();
 })();
