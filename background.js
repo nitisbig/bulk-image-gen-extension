@@ -1,6 +1,7 @@
 // Background service worker (MV3).
-// Content scripts cannot call chrome.downloads directly, so the panel sends
-// download requests here and we perform them with a custom filename.
+// Content scripts cannot call chrome.downloads directly, so the side panel's
+// engine (content.js) sends download requests here and we perform them with a
+// custom filename.
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || msg.type !== "download") return;
@@ -26,13 +27,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return true;
 });
 
-// Toolbar icon → toggle the in-page panel on the active tab. We have host
-// permission for chatgpt.com, so no extra "tabs" permission is needed. On tabs
-// without the content script (e.g. a new tab) the message has no receiver, so
-// we swallow the resulting lastError.
-chrome.action.onClicked.addListener((tab) => {
-  if (!tab || tab.id == null) return;
-  chrome.tabs.sendMessage(tab.id, { type: "toggle-panel" }, () => {
-    void chrome.runtime.lastError;
-  });
-});
+// Toolbar icon → open the browser's native side panel. openPanelOnActionClick
+// makes Chrome open the panel (side_panel.default_path from the manifest) on
+// click with no extra code and no "tabs" permission. Do NOT also register
+// chrome.action.onClicked — it conflicts with this behavior.
+function enableSidePanelOnClick() {
+  if (!chrome.sidePanel || !chrome.sidePanel.setPanelBehavior) return;
+  chrome.sidePanel
+    .setPanelBehavior({ openPanelOnActionClick: true })
+    .catch((err) => console.error("[BulkImgGen] side panel setup failed:", err));
+}
+
+// Run on install/update and on every service-worker startup (the setting is
+// per-session for an unpacked extension, so re-applying is cheap and safe).
+chrome.runtime.onInstalled.addListener(enableSidePanelOnClick);
+enableSidePanelOnClick();

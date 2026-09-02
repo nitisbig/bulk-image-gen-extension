@@ -1,8 +1,11 @@
-/* ChatGPT Bulk Image Generator — content script
+/* ChatGPT Bulk Image Generator — automation engine (content script)
  *
- * Injects a floating panel on chatgpt.com. Paste prompts (one per line);
- * the panel numbers them, then on Start it submits each prompt, waits for the
- * generated image to finish, and downloads it as 01.png, 02.png, ...
+ * Runs inside chatgpt.com. It has no UI of its own — the UI lives in the
+ * browser's side panel (sidepanel.html / sidepanel.js). This script:
+ *   • receives commands from the panel  (chrome.tabs.sendMessage → onMessage)
+ *   • drives the ChatGPT DOM: types each prompt, waits for the generated image,
+ *     downloads it as 01.png, 02.png, …
+ *   • reports progress back to the panel (chrome.runtime.sendMessage events)
  *
  * Everything ChatGPT-DOM-specific lives in SELECTORS + the small set of
  * functions below (setPromptText, submitComposer, candidateImages). If
@@ -75,6 +78,34 @@
   };
 
   // ---------------------------------------------------------------------------
+  // Panel messaging — the engine's only "output". Wrapped so a closed panel
+  // (no receiving end) never throws or spams the console.
+  // ---------------------------------------------------------------------------
+  function emit(evt, data) {
+    try {
+      chrome.runtime.sendMessage(
+        { type: "cbig-evt", evt, ...(data || {}) },
+        () => void chrome.runtime.lastError
+      );
+    } catch {
+      /* extension context gone */
+    }
+  }
+
+  function log(msg) {
+    emit("log", { msg });
+    console.log("[BulkImgGen]", msg);
+  }
+
+  function emitState() {
+    emit("state", {
+      running: state.running,
+      paused: state.paused,
+      cursor: state.cursor,
+    });
+  }
+
+  // ---------------------------------------------------------------------------
   // Small helpers
   // ---------------------------------------------------------------------------
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -107,21 +138,9 @@
     return `${folder}${safePrefix}${numLabel(i)}.${ext}`;
   }
 
-  function log(msg) {
-    const line = `[${new Date().toLocaleTimeString()}] ${msg}`;
-    if (ui.log) {
-      const div = document.createElement("div");
-      div.className = "cbig-log-line";
-      div.textContent = line;
-      ui.log.appendChild(div);
-      ui.log.scrollTop = ui.log.scrollHeight;
-    }
-    // Also mirror to console for debugging.
-    console.log("[BulkImgGen]", msg);
-  }
-
   // ---------------------------------------------------------------------------
-  // Storage
+  // Storage — the panel is the source of truth (it sends settings with "start"),
+  // but we load here too so the engine still works if commanded before a sync.
   // ---------------------------------------------------------------------------
   function loadSettings() {
     return new Promise((resolve) => {
@@ -138,16 +157,59 @@
     });
   }
 
-  let saveTimer = null;
-  function saveSettings() {
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => {
+  // ---------------------------------------------------------------------------
+  // Progress checkpoint — persisted to chrome.storage.local so an unexpected
+  // shutdown (or a tab reload / SPA re-inject) doesn't lose our place and
+  // restart at image #01. We save the cursor after every prompt; on load we
+  // restore it, so pressing Start resumes from the *next* image, not the first.
+  // ---------------------------------------------------------------------------
+  const PROGRESS_KEY = "cbigProgress";
+
+  // Cheap, stable signature of the queue so the panel can tell when the saved
+  // position belongs to a different prompt list.
+  function promptsSig(prompts) {
+    const s = prompts.join("\n");
+    let h = 0;
+    for (let i = 0; i < s.length; i++)
+      h = (Math.imul(h, 31) + s.charCodeAt(i)) | 0;
+    return `${prompts.length}:${h}`;
+  }
+
+  function saveProgress() {
+    try {
+      chrome.storage.local.set({
+        [PROGRESS_KEY]: {
+          cursor: state.cursor,
+          sig: promptsSig(getPrompts()),
+          startIndex: settings.startIndex,
+          updatedAt: Date.now(),
+        },
+      });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // Reset the checkpoint to the first image (whole queue finished, or on demand).
+  function clearProgress() {
+    state.cursor = 0;
+    saveProgress();
+  }
+
+  // Restore the saved cursor into state. Resolves with the stored record (or null).
+  function loadProgress() {
+    return new Promise((resolve) => {
       try {
-        chrome.storage.local.set({ cbigSettings: settings });
+        chrome.storage.local.get(PROGRESS_KEY, (data) => {
+          const p = data && data[PROGRESS_KEY];
+          if (p && typeof p.cursor === "number")
+            state.cursor = Math.max(0, p.cursor);
+          resolve(p || null);
+        });
       } catch {
-        /* ignore */
+        resolve(null);
       }
-    }, 250);
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -383,6 +445,13 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Row status → panel
+  // ---------------------------------------------------------------------------
+  function setRowStatus(i, status) {
+    emit("status", { i, status });
+  }
+
+  // ---------------------------------------------------------------------------
   // Run loop
   // ---------------------------------------------------------------------------
   async function runQueue() {
@@ -401,7 +470,7 @@
     state.running = true;
     state.paused = false;
     if (state.cursor >= prompts.length) state.cursor = 0;
-    reflectControls();
+    emitState();
     log(`Starting at #${numLabel(state.cursor)} (${prompts.length} prompts).`);
 
     let completedAll = true;
@@ -418,6 +487,7 @@
       }
 
       state.cursor = i;
+      saveProgress();
       setRowStatus(i, "submitting");
 
       try {
@@ -429,9 +499,22 @@
 
         const img = await waitForNewImage(prevSrcs);
         if (!img) {
+          // A null image means either a real timeout, or the user pressed Stop
+          // mid-generation (waitForNewImage bails when !state.running). Only
+          // treat it as a finished-and-skippable step in the former case —
+          // otherwise leave the checkpoint on i so resume re-runs this image.
+          if (!state.running) {
+            completedAll = false;
+            break;
+          }
           setRowStatus(i, "timeout");
           log(`#${numLabel(i)} timed out after ${Math.round(settings.timeoutMs / 1000)}s.`);
-          if (settings.skipOnFail) continue;
+          if (settings.skipOnFail) {
+            // Checkpoint past the skipped one so a crash won't re-run it.
+            state.cursor = i + 1;
+            saveProgress();
+            continue;
+          }
           completedAll = false;
           break;
         }
@@ -444,6 +527,11 @@
           setRowStatus(i, "generated");
           log(`#${numLabel(i)} generated (download skipped).`);
         }
+
+        // Image i is finished — advance the persisted checkpoint so that after
+        // an unexpected shutdown we resume from the *next* image, not this one.
+        state.cursor = i + 1;
+        saveProgress();
       } catch (e) {
         setRowStatus(i, "error");
         log(`#${numLabel(i)} error: ${e.message}`);
@@ -451,6 +539,8 @@
           completedAll = false;
           break;
         }
+        state.cursor = i + 1;
+        saveProgress();
       }
 
       if (i < prompts.length - 1) await sleep(settings.delayMs);
@@ -459,12 +549,13 @@
     state.running = false;
     state.paused = false;
     if (completedAll) {
-      state.cursor = 0;
+      clearProgress();
       log("All prompts finished.");
     } else {
+      saveProgress();
       log(`Stopped. Will resume from #${numLabel(state.cursor)}.`);
     }
-    reflectControls();
+    emitState();
   }
 
   function stopQueue() {
@@ -472,370 +563,59 @@
     state.running = false;
     state.paused = false;
     log("Stopping after the current step...");
-    reflectControls();
+    emitState();
   }
 
   function togglePause() {
     if (!state.running) return;
     state.paused = !state.paused;
     log(state.paused ? "Paused." : "Resumed.");
-    reflectControls();
+    emitState();
   }
 
   // ---------------------------------------------------------------------------
-  // UI (Shadow DOM so ChatGPT's CSS can't leak in)
-  // ---------------------------------------------------------------------------
-  const ui = {}; // filled in by buildPanel
-
-  // Inline SVG icons (Lucide-style, consistent 1.75 stroke). No emoji — vector
-  // icons scale cleanly and theme via currentColor. aria-hidden: they always sit
-  // beside a text label or an aria-labelled control.
-  const svg = (inner, o = {}) =>
-    `<svg viewBox="0 0 24 24" fill="${o.fill || "none"}" stroke="${
-      o.stroke || "currentColor"
-    }" stroke-width="${o.sw || 1.75}" stroke-linecap="round" ` +
-    `stroke-linejoin="round" aria-hidden="true" focusable="false">${inner}</svg>`;
-
-  const ICONS = {
-    logo: svg(
-      '<path d="M18 22H4a2 2 0 0 1-2-2V6"/><path d="m22 13-1.3-1.3a2.4 2.4 0 0 0-3.4 0L11 18"/><circle cx="12" cy="8" r="2"/><rect width="16" height="16" x="6" y="2" rx="2"/>'
-    ),
-    chevron: svg('<path d="m6 9 6 6 6-6"/>'),
-    close: svg('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>'),
-    play: svg('<path d="M6 4.5v15l13-7.5z"/>', { fill: "currentColor", stroke: "none" }),
-    pause: svg(
-      '<rect x="6.5" y="4.5" width="4" height="15" rx="1"/><rect x="13.5" y="4.5" width="4" height="15" rx="1"/>',
-      { fill: "currentColor", stroke: "none" }
-    ),
-    stop: svg('<rect x="6" y="6" width="12" height="12" rx="2"/>', {
-      fill: "currentColor",
-      stroke: "none",
-    }),
-    settings: svg(
-      '<line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/>'
-    ),
-    empty: svg(
-      '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>'
-    ),
-  };
-
-  function buildPanel() {
-    const host = document.createElement("div");
-    host.id = "cbig-host";
-    host.style.all = "initial";
-    const root = host.attachShadow({ mode: "open" });
-
-    const link = document.createElement("link");
-    link.rel = "stylesheet";
-    link.href = chrome.runtime.getURL("panel.css");
-    root.appendChild(link);
-
-    const wrap = document.createElement("div");
-    wrap.className = "cbig-panel";
-    wrap.setAttribute("role", "dialog");
-    wrap.setAttribute("aria-label", "Bulk Image Generator");
-    wrap.innerHTML = `
-      <div class="cbig-header" data-drag>
-        <span class="cbig-logo">${ICONS.logo}</span>
-        <span class="cbig-heading">
-          <span class="cbig-title">Bulk Image Generator</span>
-          <span class="cbig-subtitle">Queue prompts → auto-download</span>
-        </span>
-        <div class="cbig-header-btns">
-          <button class="cbig-icon cbig-min" data-min type="button" aria-label="Collapse panel" title="Collapse">${ICONS.chevron}</button>
-          <button class="cbig-icon cbig-close" data-close type="button" aria-label="Hide panel" title="Hide — reopen from the toolbar icon">${ICONS.close}</button>
-        </div>
-      </div>
-      <div class="cbig-body">
-        <div class="cbig-field">
-          <div class="cbig-label-row">
-            <label class="cbig-label" for="cbig-prompts">Prompts</label>
-            <span class="cbig-chip"><b class="cbig-num">0</b>&nbsp;queued</span>
-          </div>
-          <textarea id="cbig-prompts" class="cbig-prompts" spellcheck="false" placeholder="One prompt per line…&#10;a red fox in snow&#10;a city skyline at night&#10;a bowl of ramen, top down"></textarea>
-        </div>
-
-        <div class="cbig-progress" role="progressbar" aria-label="Queue progress" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
-          <div class="cbig-progress-head">
-            <span class="cbig-progress-count"><b class="cbig-done">0</b><small>&nbsp;/&nbsp;<span class="cbig-total">0</span> processed</small></span>
-            <span class="cbig-progress-pct">0%</span>
-          </div>
-          <div class="cbig-track"><div class="cbig-track-fill"></div></div>
-          <div class="cbig-stats">
-            <span class="cbig-stat cbig-stat-done"><b class="cbig-stat-done-n">0</b>&nbsp;done</span>
-            <span class="cbig-stat cbig-stat-fail"><b class="cbig-stat-fail-n">0</b>&nbsp;failed</span>
-            <span class="cbig-stat cbig-stat-left"><b class="cbig-stat-left-n">0</b>&nbsp;left</span>
-          </div>
-        </div>
-
-        <ol class="cbig-list" aria-label="Prompt queue"></ol>
-        <div class="cbig-empty" data-empty>
-          ${ICONS.empty}
-          <span class="cbig-empty-title">No prompts yet</span>
-          <span class="cbig-empty-sub">Paste one prompt per line above. They'll appear here, numbered and ready to generate.</span>
-        </div>
-
-        <details class="cbig-settings">
-          <summary>${ICONS.settings}<span>Settings</span><span class="cbig-chevron">${ICONS.chevron}</span></summary>
-          <div class="cbig-settings-body">
-            <div class="cbig-grid">
-              <label>Folder<input data-k="folder" type="text" spellcheck="false"></label>
-              <label>Prefix<input data-k="prefix" type="text" spellcheck="false" placeholder="(none)"></label>
-              <label>Start #<input data-k="startIndex" type="number" min="0"></label>
-              <label>Zero-pad<input data-k="pad" type="number" min="1" max="6"></label>
-              <label>Delay (ms)<input data-k="delayMs" type="number" min="0" step="500"></label>
-              <label>Timeout (ms)<input data-k="timeoutMs" type="number" min="10000" step="5000"></label>
-            </div>
-            <label class="cbig-switch">
-              <input data-k="skipOnFail" type="checkbox">
-              <span class="cbig-track-sw"></span>
-              <span class="cbig-switch-text">Skip failed prompts<small>Continue past a timeout or error</small></span>
-            </label>
-          </div>
-        </details>
-
-        <label class="cbig-switch cbig-autodl">
-          <input data-k="autoDownload" type="checkbox">
-          <span class="cbig-track-sw"></span>
-          <span class="cbig-switch-text">Auto-download images<small>Uncheck to only generate, no saving</small></span>
-        </label>
-
-        <div class="cbig-controls">
-          <button class="cbig-btn cbig-start" type="button">${ICONS.play}<span class="cbig-start-label">Start</span></button>
-          <button class="cbig-btn cbig-pause" type="button" disabled aria-label="Pause">${ICONS.pause}<span>Pause</span></button>
-          <button class="cbig-btn cbig-stop" type="button" disabled aria-label="Stop">${ICONS.stop}</button>
-        </div>
-
-        <div class="cbig-log-wrap">
-          <span class="cbig-label">Activity</span>
-          <div class="cbig-log" aria-live="polite" aria-label="Activity log"></div>
-        </div>
-      </div>
-    `;
-    root.appendChild(wrap);
-    document.documentElement.appendChild(host);
-
-    // Cache references.
-    ui.host = host;
-    ui.root = root;
-    ui.panel = wrap;
-    ui.prompts = root.querySelector(".cbig-prompts");
-    ui.num = root.querySelector(".cbig-num");
-    ui.list = root.querySelector(".cbig-list");
-    ui.empty = root.querySelector("[data-empty]");
-    ui.log = root.querySelector(".cbig-log");
-    ui.startBtn = root.querySelector(".cbig-start");
-    ui.startLabel = root.querySelector(".cbig-start-label");
-    ui.pauseBtn = root.querySelector(".cbig-pause");
-    ui.stopBtn = root.querySelector(".cbig-stop");
-    ui.closeBtn = root.querySelector("[data-close]");
-
-    // Progress + stats.
-    ui.progress = root.querySelector(".cbig-progress");
-    ui.trackFill = root.querySelector(".cbig-track-fill");
-    ui.progressPct = root.querySelector(".cbig-progress-pct");
-    ui.doneNum = root.querySelector(".cbig-done");
-    ui.totalNum = root.querySelector(".cbig-total");
-    ui.statDone = root.querySelector(".cbig-stat-done-n");
-    ui.statFail = root.querySelector(".cbig-stat-fail-n");
-    ui.statLeft = root.querySelector(".cbig-stat-left-n");
-
-    // Restore values.
-    ui.prompts.value = settings.prompts;
-    root.querySelectorAll("[data-k]").forEach((input) => {
-      const k = input.dataset.k;
-      if (input.type === "checkbox") input.checked = !!settings[k];
-      else input.value = settings[k];
-    });
-
-    // Wire events.
-    ui.prompts.addEventListener("input", () => {
-      settings.prompts = ui.prompts.value;
-      saveSettings();
-      renderList();
-    });
-
-    root.querySelectorAll("[data-k]").forEach((input) => {
-      input.addEventListener("change", () => {
-        const k = input.dataset.k;
-        if (input.type === "checkbox") settings[k] = input.checked;
-        else if (input.type === "number") settings[k] = Number(input.value);
-        else settings[k] = input.value;
-        saveSettings();
-        renderList();
-      });
-    });
-
-    ui.startBtn.addEventListener("click", () => runQueue());
-    ui.pauseBtn.addEventListener("click", () => togglePause());
-    ui.stopBtn.addEventListener("click", () => stopQueue());
-
-    root
-      .querySelector("[data-min]")
-      .addEventListener("click", () => wrap.classList.toggle("cbig-collapsed"));
-    ui.closeBtn.addEventListener("click", () => hidePanel());
-
-    makeDraggable(wrap, root.querySelector("[data-drag]"));
-    renderList();
-    reflectControls();
-  }
-
-  // Show/hide the whole panel. Closing is non-destructive — the toolbar icon
-  // re-opens it (see the runtime message listener + background.js).
-  function hidePanel() {
-    if (ui.host) ui.host.style.display = "none";
-  }
-  function showPanel() {
-    if (ui.host) ui.host.style.display = "";
-  }
-  function togglePanel() {
-    if (!ui.host) return;
-    if (ui.host.style.display === "none") showPanel();
-    else hidePanel();
-  }
-
-  function renderList() {
-    const prompts = getPrompts();
-    ui.num.textContent = String(prompts.length);
-    if (ui.empty) ui.empty.style.display = prompts.length ? "none" : "flex";
-    ui.list.innerHTML = "";
-    prompts.forEach((p, i) => {
-      const li = document.createElement("li");
-      li.className = "cbig-row";
-      li.dataset.i = String(i);
-      li.innerHTML = `
-        <span class="cbig-dot"></span>
-        <span class="cbig-rownum">${numLabel(i)}</span>
-        <span class="cbig-rowtext"></span>
-        <span class="cbig-badge" data-badge>queued</span>
-      `;
-      const text = li.querySelector(".cbig-rowtext");
-      text.textContent = p;
-      text.title = p; // full prompt on hover when the row is truncated
-      ui.list.appendChild(li);
-    });
-    updateStats();
-  }
-
-  // Recompute the progress bar + stat counts from the current row statuses.
-  // Progress advances on every *processed* prompt (a failure still counts as
-  // handled), which is the right semantics for a queue.
-  function updateStats() {
-    if (!ui.list) return;
-    const rows = Array.from(ui.list.querySelectorAll(".cbig-row"));
-    const total = rows.length;
-    let done = 0;
-    let failed = 0;
-    rows.forEach((li) => {
-      const cls = (li.querySelector("[data-badge]") || {}).className || "";
-      if (/cbig-s-(?:done|generated)\b/.test(cls)) done++;
-      else if (/cbig-s-(?:timeout|failed|error)\b/.test(cls)) failed++;
-    });
-    const finished = done + failed;
-    const left = Math.max(0, total - finished);
-    const pct = total ? Math.round((finished / total) * 100) : 0;
-
-    if (ui.progress) {
-      ui.progress.classList.toggle("is-visible", total > 0);
-      ui.progress.setAttribute("aria-valuemax", String(total));
-      ui.progress.setAttribute("aria-valuenow", String(finished));
-    }
-    if (ui.trackFill) ui.trackFill.style.width = pct + "%";
-    if (ui.progressPct) ui.progressPct.textContent = pct + "%";
-    if (ui.doneNum) ui.doneNum.textContent = String(finished);
-    if (ui.totalNum) ui.totalNum.textContent = String(total);
-    if (ui.statDone) ui.statDone.textContent = String(done);
-    if (ui.statFail) ui.statFail.textContent = String(failed);
-    if (ui.statLeft) ui.statLeft.textContent = String(left);
-  }
-
-  const STATUS_LABEL = {
-    submitting: "typing",
-    generating: "generating",
-    downloading: "saving",
-    done: "done",
-    generated: "generated",
-    timeout: "timeout",
-    failed: "save failed",
-    error: "error",
-  };
-
-  function setRowStatus(i, status) {
-    const li = ui.list && ui.list.querySelector(`.cbig-row[data-i="${i}"]`);
-    if (!li) return;
-    const badge = li.querySelector("[data-badge]");
-    badge.textContent = STATUS_LABEL[status] || status;
-    badge.className = "cbig-badge cbig-s-" + status;
-    const active =
-      status === "submitting" ||
-      status === "generating" ||
-      status === "downloading";
-    li.classList.toggle("is-active", active);
-    li.scrollIntoView({ block: "nearest" });
-    updateStats();
-  }
-
-  function reflectControls() {
-    if (!ui.startBtn) return;
-    ui.startBtn.disabled = state.running;
-    ui.pauseBtn.disabled = !state.running;
-    ui.stopBtn.disabled = !state.running;
-    ui.prompts.disabled = state.running;
-
-    ui.pauseBtn.innerHTML = state.paused
-      ? ICONS.play + "<span>Resume</span>"
-      : ICONS.pause + "<span>Pause</span>";
-    ui.pauseBtn.setAttribute("aria-label", state.paused ? "Resume" : "Pause");
-
-    if (ui.startLabel)
-      ui.startLabel.textContent =
-        !state.running && state.cursor > 0 ? "Resume queue" : "Start";
-
-    ui.panel.classList.toggle("cbig-running", state.running);
-    updateStats();
-  }
-
-  function makeDraggable(panel, handle) {
-    let sx = 0, sy = 0, ox = 0, oy = 0, dragging = false;
-    handle.style.cursor = "move";
-    handle.addEventListener("mousedown", (e) => {
-      if (e.target.closest("button")) return;
-      dragging = true;
-      const rect = panel.getBoundingClientRect();
-      ox = rect.left;
-      oy = rect.top;
-      sx = e.clientX;
-      sy = e.clientY;
-      panel.style.right = "auto";
-      panel.style.bottom = "auto";
-      e.preventDefault();
-    });
-    window.addEventListener("mousemove", (e) => {
-      if (!dragging) return;
-      panel.style.left = ox + (e.clientX - sx) + "px";
-      panel.style.top = oy + (e.clientY - sy) + "px";
-    });
-    window.addEventListener("mouseup", () => (dragging = false));
-  }
-
-  // ---------------------------------------------------------------------------
-  // Init
+  // Init — load settings, then listen for commands from the side panel.
   // ---------------------------------------------------------------------------
   (async function init() {
     await loadSettings();
-    buildPanel();
+    // Restore the saved checkpoint so a crash/reload resumes from the next
+    // image instead of #01. The panel reads the same key to show the resume point.
+    await loadProgress();
 
-    // Clicking the extension's toolbar icon toggles the panel (see background.js).
-    // This makes the header "Hide" button non-destructive — you can always get
-    // the panel back.
-    try {
-      chrome.runtime.onMessage.addListener((msg) => {
-        if (msg && msg.type === "toggle-panel") togglePanel();
-      });
-    } catch {
-      /* ignore — messaging unavailable */
-    }
+    chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+      if (!msg || msg.type !== "cbig-cmd") return;
 
-    log("Ready. Paste prompts, then click Start.");
+      switch (msg.action) {
+        case "start":
+          if (msg.settings) settings = { ...settings, ...msg.settings };
+          // Honor an explicit resume point from the panel ("Start from image #").
+          if (typeof msg.resumeAt === "number")
+            state.cursor = Math.max(0, msg.resumeAt);
+          runQueue();
+          break;
+        case "pause":
+          togglePause();
+          break;
+        case "stop":
+          stopQueue();
+          break;
+        case "reset":
+          // Panel asked to clear the checkpoint (e.g. user reset the resume #).
+          if (!state.running) clearProgress();
+          emitState();
+          break;
+        case "sync":
+          // Let a freshly-opened panel restore correct button state mid-run.
+          sendResponse({
+            running: state.running,
+            paused: state.paused,
+            cursor: state.cursor,
+          });
+          break;
+      }
+      // Only "sync" replies; the rest are fire-and-forget.
+    });
+
+    console.log("[BulkImgGen] engine ready");
   })();
 })();

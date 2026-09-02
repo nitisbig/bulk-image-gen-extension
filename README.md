@@ -5,14 +5,19 @@ A Chrome/Edge (Manifest V3) extension that automates image generation on
 extension submits each prompt, waits for the image to finish, and downloads it
 with an incremental filename: `01.png`, `02.png`, `03.png`, …
 
+The controls live in the browser's **native side panel** (docked to the right,
+beside the page) — not floating on top of chatgpt.com.
+
 ## Install (load unpacked)
 
 1. Open `chrome://extensions` (or `edge://extensions`).
 2. Turn on **Developer mode** (top-right).
 3. Click **Load unpacked** and select this folder
    (`chatgpt extension`).
-4. Open <https://chatgpt.com> and start (or open) a chat. A floating
-   **Bulk Image Generator** panel appears at the top-right.
+4. Open <https://chatgpt.com> and start (or open) a chat, then click the
+   extension's **toolbar icon** (pin it from the puzzle-piece menu for quick
+   access). The **Bulk Image Generator** opens in the browser's **side panel**,
+   docked on the right.
 
 ## Use
 
@@ -36,26 +41,34 @@ with an incremental filename: `01.png`, `02.png`, `03.png`, …
    auto-download is off). Use **Pause/Resume** or **Stop** at any time. After a
    Stop you can **Resume queue** from where it left off.
 
-**Move / resize / hide the panel:** drag the **header** to move it; drag the
-**bottom-right corner** to resize it. Use the **chevron** (˅) in the header to
-collapse/expand, and the **✕** to hide the panel. Click the extension's
-**toolbar icon** to show it again (the icon toggles the panel on the current
-chatgpt.com tab).
+**Show / hide the panel:** click the extension's **toolbar icon** to open the
+side panel; close it with the **✕** in the side panel's header (or the toolbar
+icon). Resize it by dragging its inner edge — it's a normal browser side panel.
+Your prompts and settings are saved, so they're still there next time you open
+it. The panel can be open on any tab, but **Start** only runs when a
+`chatgpt.com` tab is open (otherwise it shows a hint and stays disabled).
 
 Files download to your normal Downloads directory (Chrome does not allow
 extensions to write elsewhere), under the folder you set.
 
 ## How it works
 
-- `manifest.json` — MV3 config; content script runs only on `chatgpt.com` /
-  `chat.openai.com`; requests `downloads` + `storage` permissions.
-- `content.js` — injects the panel (in a Shadow DOM so page CSS can't interfere),
-  parses prompts, types each into the composer, submits it, watches the DOM until
-  the generated image is present and its source has been stable for ~1.5s, then
-  triggers the download.
-- `background.js` — a service worker that performs `chrome.downloads.download()`
-  with the custom filename (content scripts can't call that API directly).
-- `panel.css` — panel styling.
+- `manifest.json` — MV3 config; registers the side panel (`side_panel`), the
+  content script (runs only on `chatgpt.com` / `chat.openai.com`), and the
+  `downloads` + `storage` + `sidePanel` permissions.
+- `sidepanel.html` / `sidepanel.js` — the panel **UI**, shown in the browser's
+  side panel. Parses prompts, renders the queue / progress / activity log, and
+  sends **start / pause / stop** commands to the engine — receiving live progress
+  events back over messaging.
+- `content.js` — the automation **engine**, injected into chatgpt.com. Types each
+  prompt into the composer, submits it, watches the DOM until the generated image
+  is present and its source has been stable for ~1.5s, then triggers the download.
+  It has no UI of its own — it talks to the side panel via `chrome.runtime` /
+  `chrome.tabs` messages.
+- `background.js` — a service worker that opens the side panel on toolbar-icon
+  click (`chrome.sidePanel`) and performs `chrome.downloads.download()` with the
+  custom filename (content scripts can't call that API directly).
+- `panel.css` — side panel styling.
 
 ## If ChatGPT changes its markup
 
@@ -64,12 +77,12 @@ All the site-specific bits are isolated:
 - **Selectors** live in the `SELECTORS` object at the top of `content.js`
   (composer input, send button, stop button, assistant message container). Each
   is a list tried in order — add a new selector to the front if the UI changes.
-- **Image detection** is `findGeneratedImages()` in `content.js`. It matches
-  `<img>` elements inside assistant messages whose source looks like a generated
-  image (`oaiusercontent` / `blob:` / `files.`) and that are at least 128px.
+- **Image detection** is `candidateImages()` in `content.js`. It matches raster
+  `<img>` elements that aren't nav/avatar/icon chrome and are at least 200px on a
+  side (generated images are large).
 - **Completion detection** is `waitForNewImage()` — it waits for a new image
-  beyond those present before submitting, requires the "stop generating" control
-  to be gone, and requires the image source to hold steady (`stableMs`).
+  beyond those present before submitting, and requires the image source to hold
+  steady (`stableMs`).
 
 ## Notes & limits
 

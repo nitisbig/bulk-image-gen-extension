@@ -1,14 +1,14 @@
 /* ============================================================================
-   Bulk Image Generator — panel styles
-   Loaded inside the Shadow Root, so selectors stay simple and there is no risk
-   of clashing with (or inheriting from) ChatGPT's own CSS.
+   Bulk Image Generator — side panel styles
+   Loaded as a normal stylesheet in the extension's side panel page
+   (sidepanel.html). No Shadow Root anymore, so tokens live on :root.
 
    Design system: OLED-friendly dark, developer-tool aesthetic, ChatGPT-green
-   "run" accent. All colors flow from the semantic tokens on :host — no ad-hoc
+   "run" accent. All colors flow from the semantic tokens on :root — no ad-hoc
    hex values in components.
    ========================================================================== */
 
-:host {
+:root {
   /* ---- Surfaces (deep → elevated) ---- */
   --cbig-bg: #131417;
   --cbig-surface: #1b1c21;
@@ -59,74 +59,42 @@
     0 4px 12px -4px rgba(0, 0, 0, 0.5);
 }
 
-:host,
-* {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--cbig-bg);
+  color: var(--cbig-text);
+}
+
 /* ---------------------------------------------------------------------------
-   Panel shell
+   Panel shell — fills the browser side panel top to bottom.
    --------------------------------------------------------------------------- */
 .cbig-panel {
-  position: fixed;
-  top: 84px;
-  right: 20px;
-  width: 360px;
-  min-width: 312px;
-  min-height: 220px;
-  max-width: 96vw;
-  max-height: 92vh;
+  width: 100%;
+  height: 100vh;
   display: flex;
   flex-direction: column;
   background: var(--cbig-bg);
   color: var(--cbig-text);
-  border: 1px solid var(--cbig-border);
-  border-radius: 14px;
-  box-shadow: var(--cbig-shadow);
   font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
     Helvetica, Arial, sans-serif;
   font-size: 13px;
   line-height: 1.45;
   letter-spacing: 0.01em;
-  z-index: 2147483647;
   overflow: hidden;
-  resize: both; /* drag the bottom-right corner to resize */
   -webkit-font-smoothing: antialiased;
-  animation: cbig-in var(--cbig-t) var(--cbig-ease);
-}
-
-@keyframes cbig-in {
-  from {
-    opacity: 0;
-    transform: translateY(-6px) scale(0.99);
-  }
-}
-
-/* Decorative resize grip so the native corner handle is discoverable. */
-.cbig-panel::after {
-  content: "";
-  position: absolute;
-  right: 3px;
-  bottom: 3px;
-  width: 12px;
-  height: 12px;
-  pointer-events: none;
-  background: linear-gradient(
-    135deg,
-    transparent 0 45%,
-    var(--cbig-border-strong) 45% 55%,
-    transparent 55% 70%,
-    var(--cbig-border-strong) 70% 80%,
-    transparent 80%
-  );
-  opacity: 0.7;
-}
-.cbig-panel.cbig-collapsed::after {
-  display: none;
 }
 
 /* ---------------------------------------------------------------------------
-   Header (drag handle)
+   Header (title bar)
    --------------------------------------------------------------------------- */
 .cbig-header {
   display: flex;
@@ -175,43 +143,29 @@
   font-weight: 500;
 }
 
-.cbig-header-btns {
+/* Inline hint shown when no chatgpt.com tab is open. */
+.cbig-hint {
   display: flex;
-  gap: 4px;
-  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 11px;
+  border: 1px solid var(--cbig-warn);
+  border-radius: var(--cbig-r-md);
+  background: var(--cbig-warn-bg);
+  color: var(--cbig-warn);
+  font-size: 11.5px;
+  font-weight: 500;
 }
-
-/* Icon-only window controls */
-.cbig-icon {
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: none;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--cbig-muted);
-  cursor: pointer;
-  transition: background var(--cbig-t-fast) var(--cbig-ease),
-    color var(--cbig-t-fast) var(--cbig-ease);
+.cbig-hint[hidden] {
+  display: none;
 }
-.cbig-icon:hover {
-  background: var(--cbig-surface-3);
-  color: var(--cbig-text);
-}
-.cbig-icon svg {
+.cbig-hint svg {
   width: 16px;
   height: 16px;
-  transition: transform var(--cbig-t) var(--cbig-ease);
+  flex: none;
 }
-.cbig-close:hover {
-  background: var(--cbig-err-bg);
-  color: var(--cbig-err);
-}
-/* Rotate the chevron when collapsed. */
-.cbig-panel.cbig-collapsed .cbig-min svg {
-  transform: rotate(-180deg);
+.cbig-hint b {
+  font-weight: 700;
 }
 
 /* ---------------------------------------------------------------------------
@@ -225,14 +179,6 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-}
-.cbig-panel.cbig-collapsed .cbig-body {
-  display: none;
-}
-.cbig-panel.cbig-collapsed {
-  resize: none;
-  min-height: 0;
-  height: auto !important;
 }
 
 /* Section label + trailing chip */
@@ -716,6 +662,112 @@
 }
 
 /* ---------------------------------------------------------------------------
+   Resume point (crash-safe checkpoint)
+   --------------------------------------------------------------------------- */
+.cbig-resume {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 11px 12px;
+  border: 1px solid var(--cbig-border);
+  border-radius: var(--cbig-r-md);
+  background: var(--cbig-surface);
+}
+.cbig-resume-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cbig-resume-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--cbig-muted);
+}
+.cbig-resume-title svg {
+  width: 14px;
+  height: 14px;
+  color: var(--cbig-accent-text);
+}
+.cbig-resume-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: var(--cbig-r-pill);
+  background: var(--cbig-ok-bg);
+  color: var(--cbig-ok);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.cbig-resume-badge[hidden] {
+  display: none;
+}
+
+.cbig-resume-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.cbig-resume-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--cbig-muted);
+}
+.cbig-resume-input {
+  padding: 8px 10px;
+  background: var(--cbig-input);
+  color: var(--cbig-text);
+  border: 1px solid var(--cbig-border);
+  border-radius: var(--cbig-r-sm);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  transition: border-color var(--cbig-t) var(--cbig-ease),
+    box-shadow var(--cbig-t) var(--cbig-ease);
+}
+.cbig-resume-input:focus-visible {
+  outline: none;
+  border-color: var(--cbig-accent);
+  box-shadow: 0 0 0 3px rgba(16, 163, 127, 0.22);
+}
+.cbig-resume-input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Reset button reuses .cbig-btn; keep it compact next to the field. */
+.cbig-reset {
+  flex: none;
+  min-height: 38px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+
+.cbig-resume-hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--cbig-muted);
+  font-variant-numeric: tabular-nums;
+}
+.cbig-resume-hint.is-warn {
+  color: var(--cbig-warn);
+}
+
+/* ---------------------------------------------------------------------------
    Controls
    --------------------------------------------------------------------------- */
 .cbig-controls {
@@ -856,7 +908,6 @@
 @media (prefers-reduced-motion: reduce) {
   .cbig-panel,
   .cbig-track-fill,
-  .cbig-icon svg,
   .cbig-dot {
     animation: none !important;
     transition-duration: 0.01ms !important;
