@@ -49,7 +49,9 @@ it. The panel can be open on any tab, but **Start** only runs when a
 `chatgpt.com` tab is open (otherwise it shows a hint and stays disabled).
 
 Files download to your normal Downloads directory (Chrome does not allow
-extensions to write elsewhere), under the folder you set.
+extensions to write elsewhere), under the folder you set. Images are converted
+to PNG before saving. If a numbered file already exists, Chrome adds a suffix
+to avoid overwriting it.
 
 ## How it works
 

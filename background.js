@@ -3,8 +3,43 @@
 // engine (content.js) sends download requests here and we perform them with a
 // custom filename.
 
+// Chrome ignores DownloadOptions.filename whenever any extension registers an
+// onDeterminingFilename listener. Keep the requested name until that event and
+// explicitly suggest it for downloads started by this extension.
+const pendingNames = new Map();
+
+function removePendingName(url, request) {
+  const queue = pendingNames.get(url);
+  if (!queue) return;
+  const index = queue.indexOf(request);
+  if (index !== -1) queue.splice(index, 1);
+  if (queue.length === 0) pendingNames.delete(url);
+}
+
+chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
+  if (item.byExtensionId && item.byExtensionId !== chrome.runtime.id) {
+    suggest();
+    return;
+  }
+
+  const queue = pendingNames.get(item.url);
+  if (!queue || queue.length === 0) {
+    suggest();
+    return;
+  }
+
+  const request = queue[0];
+  removePendingName(item.url, request);
+  suggest({ filename: request.filename, conflictAction: "uniquify" });
+});
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || msg.type !== "download") return;
+
+  const request = { filename: msg.filename };
+  const queue = pendingNames.get(msg.url) || [];
+  queue.push(request);
+  pendingNames.set(msg.url, queue);
 
   chrome.downloads.download(
     {
@@ -15,6 +50,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     },
     (downloadId) => {
       const err = chrome.runtime.lastError;
+      if (err || downloadId === undefined) removePendingName(msg.url, request);
       sendResponse({
         ok: !err && downloadId !== undefined,
         downloadId: downloadId,

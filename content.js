@@ -61,7 +61,7 @@
     folder: "chatgpt-bulk",
     startIndex: 1,
     pad: 2,
-    ext: "png", // fallback extension; real one inferred from the blob when possible
+    ext: "png",
     delayMs: 3000, // pause between prompts
     timeoutMs: 180000, // max wait for one image
     stableMs: 1500, // image src must hold steady this long to count as "done"
@@ -401,6 +401,41 @@
     });
   }
 
+  async function imageToPngDataURL(img) {
+    const sourceUrl = img.currentSrc || img.src;
+    let source = img;
+    let bitmap = null;
+
+    // Fetching first also handles blob: URLs and authenticated image URLs. If
+    // the page cannot fetch the source, drawing the displayed image may still
+    // work when it was loaded with CORS permission.
+    try {
+      const response = await fetch(sourceUrl);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      bitmap = await createImageBitmap(await response.blob());
+      source = bitmap;
+    } catch {
+      // Try the decoded <img> below. A tainted canvas will fail explicitly.
+    }
+
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = source.naturalWidth || source.width;
+      canvas.height = source.naturalHeight || source.height;
+      if (!canvas.width || !canvas.height) throw new Error("Image has no pixels");
+      canvas.getContext("2d").drawImage(source, 0, 0);
+      const png = await new Promise((resolve, reject) => {
+        canvas.toBlob(
+          (blob) => blob ? resolve(blob) : reject(new Error("PNG conversion failed")),
+          "image/png"
+        );
+      });
+      return await blobToDataURL(png);
+    } finally {
+      if (bitmap) bitmap.close();
+    }
+  }
+
   function sendDownload(url, filename) {
     return new Promise((resolve) => {
       try {
@@ -418,26 +453,16 @@
   }
 
   async function downloadImage(index, img) {
-    let url = img.currentSrc || img.src;
-    let ext = settings.ext;
-
-    // For blob: and oaiusercontent URLs, fetch in-page (we have cookies + host
-    // permission) and hand a data URL to the background downloader. This also
-    // lets us learn the true file type.
+    const filename = buildPath(index, "png");
+    let url;
     try {
-      if (url.startsWith("blob:") || /oaiusercontent/i.test(url)) {
-        const resp = await fetch(url);
-        const blob = await resp.blob();
-        if (blob.type && blob.type.startsWith("image/")) {
-          ext = blob.type.split("/")[1].replace("jpeg", "jpg");
-        }
-        url = await blobToDataURL(blob);
-      }
+      url = await imageToPngDataURL(img);
     } catch (e) {
-      log(`Could not fetch image blob (${e.message}); trying direct URL.`);
+      const error = `Could not convert image to PNG: ${e.message}`;
+      log(`Download failed for ${filename}: ${error}`);
+      return { ok: false, error };
     }
 
-    const filename = buildPath(index, ext);
     const res = await sendDownload(url, filename);
     if (res.ok) log(`Saved ${filename}`);
     else log(`Download failed for ${filename}: ${res.error}`);
